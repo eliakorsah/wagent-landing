@@ -7,6 +7,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: '/',
       disallow: ['/dashboard/', '/api/', '/onboarding/'],
     },
-    sitemap: 'https://wagent.tritech.com.gh/sitemap.xml',
+    sitemap: 'https://wagent-africa.com/sitemap.xml',
   }
 }
