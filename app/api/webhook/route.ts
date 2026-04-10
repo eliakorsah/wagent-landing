@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true })
     }
 
-    const { message, phoneNumberId, businessAccountId } = extractMessageFromWebhook(body)
+    const { message, phoneNumberId, businessAccountId, contactName } = extractMessageFromWebhook(body)
     if (!message || !phoneNumberId) {
       return NextResponse.json({ success: true })
     }
@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
         .insert({
           business_id: business.id,
           customer_phone: customerPhone,
+          customer_name: contactName || undefined,
           status: 'ai_active',
           last_message: customerText,
           last_message_at: new Date().toISOString(),
@@ -109,6 +110,7 @@ export async function POST(request: NextRequest) {
         last_message: customerText,
         last_message_at: new Date().toISOString(),
         unread_count: (conversation.unread_count || 0) + 1,
+        ...(contactName ? { customer_name: contactName } : {}),
       }).eq('id', conversation.id)
     }
 

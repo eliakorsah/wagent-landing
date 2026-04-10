@@ -101,6 +101,7 @@ export function extractMessageFromWebhook(body: any): {
   message: WhatsAppMessage | null
   phoneNumberId: string | null
   businessAccountId: string | null
+  contactName: string | null
 } {
   try {
     const entry = body?.entry?.[0]
@@ -109,9 +110,10 @@ export function extractMessageFromWebhook(body: any): {
     const message = value?.messages?.[0]
     const phoneNumberId = value?.metadata?.phone_number_id
     const businessAccountId = entry?.id
+    const contactName = value?.contacts?.[0]?.profile?.name || null
 
-    return { message: message || null, phoneNumberId, businessAccountId }
+    return { message: message || null, phoneNumberId, businessAccountId, contactName }
   } catch {
-    return { message: null, phoneNumberId: null, businessAccountId: null }
+    return { message: null, phoneNumberId: null, businessAccountId: null, contactName: null }
   }
 }

@@ -44,9 +44,9 @@ export async function GET(request: NextRequest) {
       paystack_customer_code: customer?.customer_code,
     }).eq('id', businessId)
 
-    // Redirect to landing site with success flag
+    // Redirect to dashboard with success flag
     return NextResponse.redirect(
-      `https://wagent-landing.vercel.app/?payment=success&plan=${plan}`
+      new URL(`/dashboard?payment=success&plan=${plan}`, request.url)
     )
   } catch (e) {
     console.error('Paystack verify error:', e)

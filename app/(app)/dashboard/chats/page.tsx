@@ -8,7 +8,7 @@ interface Conversation {
   status: string; last_message?: string; last_message_at?: string; unread_count: number
 }
 interface Message {
-  id: string; from_role: string; message_type: string
+  id: string; conversation_id: string; from_role: string; message_type: string
   content?: string; audio_url?: string; created_at: string; status: string
 }
 
@@ -69,6 +69,10 @@ export default function ChatsPage() {
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const activeConvRef = useRef<string | null>(null)
+
+  // Keep ref in sync so polling/realtime callbacks see the latest value
+  useEffect(() => { activeConvRef.current = activeConv?.id || null }, [activeConv])
 
   useEffect(() => {
     const init = async () => {
@@ -89,22 +93,73 @@ export default function ChatsPage() {
     init()
   }, [])
 
+  // Realtime subscription
   useEffect(() => {
     if (!businessId) return
     const channel = supabase.channel('chats-realtime')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `business_id=eq.${businessId}` }, (payload) => {
-        setMessages(prev => [...prev, payload.new as Message])
-        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+        const newMsg = payload.new as Message
+        // Only add to current view if it belongs to the active conversation
+        if (newMsg.conversation_id === activeConvRef.current) {
+          setMessages(prev => {
+            if (prev.some(m => m.id === newMsg.id)) return prev
+            return [...prev, newMsg]
+          })
+          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+        }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `business_id=eq.${businessId}` }, (payload) => {
         const newData = payload.new as Conversation
         setConvs(prev => {
-          const updated = prev.map(c => c.id === newData.id ? { ...c, ...newData } : c)
+          const exists = prev.some(c => c.id === newData.id)
+          const updated = exists
+            ? prev.map(c => c.id === newData.id ? { ...c, ...newData } : c)
+            : [newData, ...prev]
           return updated.sort((a, b) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime())
         })
+        // Update active conv header if it's the one being viewed
+        if (newData.id === activeConvRef.current) {
+          setActiveConv(prev => prev ? { ...prev, ...newData } : null)
+        }
       })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
+  }, [businessId])
+
+  // Polling fallback — refreshes conversations every 3s and messages every 2s
+  // This guarantees live updates even if Supabase Realtime isn't enabled
+  useEffect(() => {
+    if (!businessId) return
+
+    const pollConvs = setInterval(async () => {
+      const { data } = await supabase.from('conversations').select('*').eq('business_id', businessId).order('last_message_at', { ascending: false }).limit(50)
+      if (data) {
+        setConvs(data)
+        // Update active conv if it changed
+        const active = activeConvRef.current
+        if (active) {
+          const updated = data.find(c => c.id === active)
+          if (updated) setActiveConv(prev => prev ? { ...prev, ...updated } : null)
+        }
+      }
+    }, 3000)
+
+    const pollMsgs = setInterval(async () => {
+      const convId = activeConvRef.current
+      if (!convId) return
+      const { data } = await supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at').limit(100)
+      if (data) {
+        setMessages(prev => {
+          if (prev.length === data.length && prev[prev.length - 1]?.id === data[data.length - 1]?.id) return prev
+          if (data.length > prev.length) {
+            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+          }
+          return data
+        })
+      }
+    }, 2000)
+
+    return () => { clearInterval(pollConvs); clearInterval(pollMsgs) }
   }, [businessId])
 
   const loadConversation = async (conv: Conversation) => {
@@ -112,6 +167,11 @@ export default function ChatsPage() {
     const { data } = await supabase.from('messages').select('*').eq('conversation_id', conv.id).order('created_at').limit(100)
     setMessages(data || [])
     setTimeout(() => messagesEndRef.current?.scrollIntoView(), 50)
+    // Mark as read
+    if (conv.unread_count > 0) {
+      await supabase.from('conversations').update({ unread_count: 0 }).eq('id', conv.id)
+      setConvs(prev => prev.map(c => c.id === conv.id ? { ...c, unread_count: 0 } : c))
+    }
   }
 
   const sendReply = async (e: React.FormEvent) => {
@@ -145,6 +205,9 @@ export default function ChatsPage() {
   })
 
   const messageGroups = groupMessagesByDate(messages)
+
+  const displayName = (conv: Conversation) =>
+    conv.customer_name || `+${conv.customer_phone.replace(/^(\d{3})(\d{3})(\d{4,})$/, '$1 $2 $3')}`
 
   const initials = (conv: Conversation) =>
     (conv.customer_name || conv.customer_phone).charAt(0).toUpperCase()
@@ -218,7 +281,7 @@ export default function ChatsPage() {
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between gap-1">
-                    <span className="text-[#e9edef] text-sm font-medium truncate">{conv.customer_name || conv.customer_phone}</span>
+                    <span className="text-[#e9edef] text-sm font-medium truncate">{displayName(conv)}</span>
                     <span className="text-[#8696a0] text-[10px] flex-shrink-0">{conv.last_message_at ? formatListTime(conv.last_message_at) : ''}</span>
                   </div>
                   <div className="flex items-center justify-between gap-1 mt-0.5">
@@ -265,13 +328,13 @@ export default function ChatsPage() {
 
             <div className="flex-1 min-w-0">
               <div className="text-[#e9edef] font-semibold text-sm leading-none">
-                {activeConv.customer_name || activeConv.customer_phone}
+                {displayName(activeConv)}
               </div>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${statusConfig[activeConv.status]?.badge}`}>
                   {statusConfig[activeConv.status]?.label}
                 </span>
-                <span className="text-[#8696a0] text-[10px]">{activeConv.customer_phone}</span>
+                <span className="text-[#8696a0] text-[10px]">+{activeConv.customer_phone}</span>
               </div>
             </div>
 
