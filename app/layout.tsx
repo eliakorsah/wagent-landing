@@ -3,7 +3,7 @@ import './globals.css'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { CookieBanner } from '@/components/CookieBanner'
 
-const BASE_URL = 'https://wagent-africa.com'
+const BASE_URL = 'https://wagent-landing.vercel.app'
 
 export const metadata: Metadata = {
   metadataBase: new URL(BASE_URL),
@@ -69,8 +69,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 '@context': 'https://schema.org',
                 '@type': 'Organization',
                 name: 'LYTRIX CONSULT',
-                url: 'https://wagent-africa.com',
-                logo: 'https://wagent-africa.com/logo%26name.png',
+                url: 'https://wagent-landing.vercel.app',
+                logo: 'https://wagent-landing.vercel.app/logo%26name.png',
                 contactPoint: {
                   '@type': 'ContactPoint',
                   contactType: 'customer support',
@@ -90,7 +90,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 applicationCategory: 'BusinessApplication',
                 operatingSystem: 'Web',
                 description: 'AI WhatsApp agent that auto-replies to customer messages for businesses in Ghana and West Africa.',
-                url: 'https://wagent-africa.com',
+                url: 'https://wagent-landing.vercel.app',
                 offers: {
                   '@type': 'Offer',
                   price: '0',
@@ -106,10 +106,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 '@context': 'https://schema.org',
                 '@type': 'WebSite',
                 name: 'WAgenT',
-                url: 'https://wagent-africa.com',
+                url: 'https://wagent-landing.vercel.app',
                 potentialAction: {
                   '@type': 'SearchAction',
-                  target: 'https://wagent-africa.com/signup',
+                  target: 'https://wagent-landing.vercel.app/signup',
                   'query-input': 'required name=signup',
                 },
               },

@@ -1,6 +1,6 @@
 import { MetadataRoute } from 'next'
 
-const BASE = 'https://wagent-africa.com'
+const BASE = 'https://wagent-landing.vercel.app'
 
 export default function sitemap(): MetadataRoute.Sitemap {
   return [

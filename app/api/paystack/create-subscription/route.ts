@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     const planConfig = PLANS[plan as keyof typeof PLANS]?.[billing as 'monthly' | 'annual']
     if (!planConfig) return NextResponse.json({ error: 'Invalid plan' }, { status: 400 })
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://wagent-africa.com'
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://wagent-landing.vercel.app'
     const callbackUrl = `${appUrl}/api/paystack/verify`
 
     const result = await initializeTransaction(
