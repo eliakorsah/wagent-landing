@@ -40,33 +40,34 @@ export async function POST(request: NextRequest) {
       processing_status: 'queued',
     }).select().single()
 
-    // Process text extraction async (in background)
-    extractAndProcess(doc!.id, file, business.id, serviceClient)
+    // Process text extraction before returning (Vercel kills the function after response)
+    await extractAndProcess(doc!.id, arrayBuffer, file.name, file.type, serviceClient)
 
-    return NextResponse.json({ doc, success: true })
+    const { data: updatedDoc } = await serviceClient.from('training_docs').select().eq('id', doc!.id).single()
+    return NextResponse.json({ doc: updatedDoc, success: true })
   } catch (e: any) {
     console.error('Training documents POST error:', e)
     return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-async function extractAndProcess(docId: string, file: File, businessId: string, supabase: any) {
+async function extractAndProcess(docId: string, arrayBuffer: ArrayBuffer, fileName: string, fileType: string, supabase: any) {
   try {
     await supabase.from('training_docs').update({ processing_status: 'processing' }).eq('id', docId)
 
     let text = ''
-    const buffer = await file.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
 
-    if (file.type === 'application/pdf') {
+    if (fileType === 'application/pdf') {
       const pdfParse = require('pdf-parse')
-      const result = await pdfParse(Buffer.from(buffer))
+      const result = await pdfParse(buffer)
       text = result.text
-    } else if (file.name.endsWith('.docx')) {
+    } else if (fileName.endsWith('.docx')) {
       const mammoth = require('mammoth')
-      const result = await mammoth.extractRawText({ buffer: Buffer.from(buffer) })
+      const result = await mammoth.extractRawText({ buffer })
       text = result.value
     } else {
-      text = new TextDecoder().decode(buffer)
+      text = new TextDecoder().decode(arrayBuffer)
     }
 
     await supabase.from('training_docs').update({
