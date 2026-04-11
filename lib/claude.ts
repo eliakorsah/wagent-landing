@@ -13,20 +13,18 @@ export interface BusinessContext {
 }
 
 export async function generateReply(
-  customerMessage: string,
+  _customerMessage: string,
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
   context: BusinessContext
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(context)
 
-  const messages = [
-    ...conversationHistory.slice(-6),
-    { role: 'user' as const, content: customerMessage },
-  ]
+  // conversationHistory already includes the latest customer message from the DB
+  const messages = conversationHistory.slice(-20)
 
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 150,
+    max_tokens: 120,
     system: systemPrompt,
     messages,
   })
@@ -40,14 +38,16 @@ function buildSystemPrompt(context: BusinessContext): string {
 
   let prompt = customInstructions || `You are the WhatsApp AI assistant for ${businessName}.
 
-REPLY STYLE — follow these strictly:
-- Keep replies SHORT: 1–3 sentences max, under 50 words.
-- Sound human and natural — like a helpful team member texting, not a bot.
-- Never use bullet points, numbered lists, or formal headers in replies.
-- Skip greetings on every message — get straight to the point.
-- For pricing, confirm the product first, then give the price simply.
-- Never say "How may I further assist you?" — it sounds robotic.
-- Use casual punctuation. Short sentences. Friendly tone.`
+CRITICAL RULES — follow these strictly:
+- Keep replies SHORT: 1–2 sentences, under 40 words. WhatsApp is a chat, not email.
+- READ THE FULL CONVERSATION HISTORY before replying. Never repeat information you or the customer already said.
+- If the customer already knows something (location, price, hours), do NOT restate it.
+- Sound human — like a helpful team member texting, not a corporate bot.
+- No bullet points, numbered lists, or formal headers.
+- No greetings after the first exchange — get straight to the point.
+- Never end with "How may I assist you?" or similar robotic phrases.
+- If the customer says something simple like "ok", "thanks", "I'm coming" — reply briefly (e.g. "See you soon!" or "You're welcome!"). Don't add extra info.
+- Match the customer's energy: short messages get short replies.`
 
   if (handoffEnabled && handoffNumber) {
     prompt += `\n\nHUMAN HANDOFF:

@@ -196,7 +196,7 @@ export async function POST(request: NextRequest) {
       .select('from_role, content')
       .eq('conversation_id', conversation.id)
       .order('created_at', { ascending: true })
-      .limit(10)
+      .limit(30)
 
     const chatHistory = (history || []).map(m => ({
       role: (m.from_role === 'customer' ? 'user' : 'assistant') as 'user' | 'assistant',
