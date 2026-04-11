@@ -1,3 +1,4 @@
+import 'server-only'
 import axios from 'axios'
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1'

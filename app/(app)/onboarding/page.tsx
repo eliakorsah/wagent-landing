@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 
 function SupportBanner() {
@@ -97,8 +98,7 @@ export default function OnboardingPage() {
       <div className="px-6 py-5 border-b border-white/5">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <Link href="/" className="flex items-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo&name.png" alt="WAgenT" className="h-9 w-auto object-contain" />
+            <Image src="/logo&name.png" alt="WAgenT" width={120} height={36} className="h-9 w-auto object-contain" />
           </Link>
           <div className="flex gap-2">
             {steps.map((s, i) => (

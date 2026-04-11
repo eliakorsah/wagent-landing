@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 
 interface Conversation {
@@ -65,6 +66,7 @@ export default function ChatsPage() {
   const audioChunksRef = useRef<Blob[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const docInputRef = useRef<HTMLInputElement>(null)
+  const realtimeOk = useRef(false)
 
   useEffect(() => { activeConvRef.current = activeConv?.id || null }, [activeConv])
 
@@ -106,22 +108,26 @@ export default function ChatsPage() {
         })
         if (nd.id === activeConvRef.current) setActiveConv(prev => prev ? { ...prev, ...nd } : null)
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      .subscribe((status) => {
+        realtimeOk.current = status === 'SUBSCRIBED'
+      })
+    return () => { realtimeOk.current = false; supabase.removeChannel(channel) }
   }, [businessId])
 
   // Polling fallback
   useEffect(() => {
     if (!businessId) return
     const p1 = setInterval(async () => {
+      if (realtimeOk.current) return
       const { data } = await supabase.from('conversations').select('*').eq('business_id', businessId).order('last_message_at', { ascending: false }).limit(50)
       if (data) {
         setConvs(data)
         const a = activeConvRef.current
         if (a) { const u = data.find(c => c.id === a); if (u) setActiveConv(prev => prev ? { ...prev, ...u } : null) }
       }
-    }, 3000)
+    }, 5000)
     const p2 = setInterval(async () => {
+      if (realtimeOk.current) return
       const cid = activeConvRef.current
       if (!cid) return
       const { data } = await supabase.from('messages').select('*').eq('conversation_id', cid).order('created_at').limit(100)
@@ -132,7 +138,7 @@ export default function ChatsPage() {
           return data
         })
       }
-    }, 2000)
+    }, 4000)
     return () => { clearInterval(p1); clearInterval(p2) }
   }, [businessId])
 
@@ -403,7 +409,9 @@ export default function ChatsPage() {
                           </div>
                         ) : msg.message_type === 'image' && msg.audio_url ? (
                           <div className="min-w-[200px]">
-                            <img src={msg.audio_url} alt="" className="rounded-md max-w-full max-h-[300px] object-cover" />
+                            <div className="relative max-w-full max-h-[300px] min-h-[150px] rounded-md overflow-hidden">
+                              <Image src={msg.audio_url} alt="" fill className="object-cover" sizes="300px" unoptimized />
+                            </div>
                             {msg.content && msg.content !== 'Photo' && <p className="text-[13px] mt-1">{msg.content}</p>}
                           </div>
                         ) : msg.message_type === 'document' && msg.audio_url ? (

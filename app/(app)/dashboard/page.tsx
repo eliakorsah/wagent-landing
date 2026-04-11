@@ -18,18 +18,12 @@ export default async function DashboardPage() {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  const [{ count: totalConvs }, { count: aiReplies }, { count: voiceMsgs }] = await Promise.all([
+  const [{ count: totalConvs }, { count: aiReplies }, { count: voiceMsgs }, { data: recentConvs }] = await Promise.all([
     supabase.from('conversations').select('*', { count: 'exact', head: true }).eq('business_id', business.id).gte('created_at', today.toISOString()),
     supabase.from('messages').select('*', { count: 'exact', head: true }).eq('business_id', business.id).eq('from_role', 'ai').gte('created_at', today.toISOString()),
     supabase.from('messages').select('*', { count: 'exact', head: true }).eq('business_id', business.id).eq('message_type', 'audio').gte('created_at', today.toISOString()),
+    supabase.from('conversations').select('id, customer_phone, customer_name, status, last_message, last_message_at, unread_count').eq('business_id', business.id).order('last_message_at', { ascending: false }).limit(10),
   ])
-
-  const { data: recentConvs } = await supabase
-    .from('conversations')
-    .select('id, customer_phone, customer_name, status, last_message, last_message_at, unread_count')
-    .eq('business_id', business.id)
-    .order('last_message_at', { ascending: false })
-    .limit(10)
 
   return (
     <OverviewClient

@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ThemeToggle } from '@/components/ThemeProvider'
 
@@ -19,7 +19,7 @@ const navItems = [
     icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /></svg>,
   },
   {
-    label: 'Live Chats', href: '/dashboard/chats', badge: 3,
+    label: 'Live Chats', href: '/dashboard/chats', badgeKey: 'chats',
     icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" /></svg>,
   },
   {
@@ -58,6 +58,18 @@ export default function Sidebar({ business, user }: SidebarProps) {
   const supabase = createClient()
 
   const isAdmin = !!user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  useEffect(() => {
+    if (!business?.id) return
+    const fetchUnread = async () => {
+      const { count } = await supabase.from('conversations').select('*', { count: 'exact', head: true }).eq('business_id', business.id).gt('unread_count', 0)
+      setUnreadCount(count || 0)
+    }
+    fetchUnread()
+    const interval = setInterval(fetchUnread, 10000)
+    return () => clearInterval(interval)
+  }, [business?.id])
 
   const toggleAI = async () => {
     const next = !aiActive
@@ -103,7 +115,7 @@ export default function Sidebar({ business, user }: SidebarProps) {
               <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${active ? 'bg-[#2a3942] text-[#e9edef]' : 'text-[#8696a0] hover:bg-[#1f2c34] hover:text-[#e9edef]'}`}>
                 <span className={active ? 'text-[#00a884]' : ''}>{item.icon}</span>
                 {item.label}
-                {item.badge && <span className="ml-auto bg-[#00a884] text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">{item.badge}</span>}
+                {item.badgeKey === 'chats' && unreadCount > 0 && <span className="ml-auto bg-[#00a884] text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">{unreadCount}</span>}
               </Link>
             )
           })}

@@ -1,6 +1,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import AnalyticsClient from './AnalyticsClient'
+import dynamic from 'next/dynamic'
+
+const AnalyticsClient = dynamic(() => import('./AnalyticsClient'), {
+  loading: () => <div className="flex items-center justify-center h-64"><div className="skeleton w-48 h-6" /></div>,
+})
 
 export default async function AnalyticsPage() {
   const supabase = createClient()
@@ -13,18 +17,10 @@ export default async function AnalyticsPage() {
   const thirtyDaysAgo = new Date()
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
 
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('from_role, created_at, message_type')
-    .eq('business_id', business.id)
-    .gte('created_at', thirtyDaysAgo.toISOString())
-    .order('created_at')
-
-  const { data: conversations } = await supabase
-    .from('conversations')
-    .select('status, created_at')
-    .eq('business_id', business.id)
-    .gte('created_at', thirtyDaysAgo.toISOString())
+  const [{ data: messages }, { data: conversations }] = await Promise.all([
+    supabase.from('messages').select('from_role, created_at, message_type').eq('business_id', business.id).gte('created_at', thirtyDaysAgo.toISOString()).order('created_at'),
+    supabase.from('conversations').select('status, created_at').eq('business_id', business.id).gte('created_at', thirtyDaysAgo.toISOString()),
+  ])
 
   return <AnalyticsClient messages={messages || []} conversations={conversations || []} />
 }

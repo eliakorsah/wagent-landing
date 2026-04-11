@@ -44,8 +44,9 @@ export async function POST(request: NextRequest) {
     extractAndProcess(doc!.id, file, business.id, serviceClient)
 
     return NextResponse.json({ doc, success: true })
-  } catch (e) {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  } catch (e: any) {
+    console.error('Training documents POST error:', e)
+    return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
