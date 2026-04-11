@@ -12,25 +12,29 @@ interface Message {
   content?: string; audio_url?: string; created_at: string; status: string
 }
 
-const statusConfig: Record<string, { label: string; dot: string; badge: string }> = {
-  ai_active: { label: 'AI Active', dot: 'bg-[#00a884]', badge: 'bg-[#00a884]/15 text-[#00a884]' },
-  manual: { label: 'Manual', dot: 'bg-blue-400', badge: 'bg-blue-500/15 text-blue-400' },
-  resolved: { label: 'Resolved', dot: 'bg-[#374045]', badge: 'bg-[#374045] text-[#8696a0]' },
-  needs_human: { label: 'Needs Human', dot: 'bg-red-400', badge: 'bg-red-500/15 text-red-400' },
-}
+const filters = ['All', 'Unread', 'AI Active', 'Manual', 'Resolved']
 
-const filters = ['All', 'AI Active', 'Manual', 'Resolved', 'Needs Human']
+// Deterministic avatar color from name/phone
+const avatarColors = [
+  '#00a884', '#53bdeb', '#7c8c95', '#e06c75', '#e5c07b',
+  '#61afef', '#c678dd', '#56b6c2', '#d19a66', '#98c379',
+]
+function getAvatarColor(str: string) {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash)
+  return avatarColors[Math.abs(hash) % avatarColors.length]
+}
 
 function formatTime(iso: string) {
   const d = new Date(iso)
-  return d.toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return d.toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit', hour12: true })
 }
 
 function formatListTime(iso: string) {
   const d = new Date(iso)
   const now = new Date()
   const diff = now.getTime() - d.getTime()
-  if (diff < 86400000) return d.toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit', hour12: false })
+  if (diff < 86400000) return d.toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit', hour12: true })
   if (diff < 604800000) return d.toLocaleDateString('en-GH', { weekday: 'short' })
   return d.toLocaleDateString('en-GH', { day: 'numeric', month: 'short' })
 }
@@ -68,10 +72,10 @@ export default function ChatsPage() {
   const [search, setSearch] = useState('')
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const activeConvRef = useRef<string | null>(null)
 
-  // Keep ref in sync so polling/realtime callbacks see the latest value
   useEffect(() => { activeConvRef.current = activeConv?.id || null }, [activeConv])
 
   useEffect(() => {
@@ -93,13 +97,12 @@ export default function ChatsPage() {
     init()
   }, [])
 
-  // Realtime subscription
+  // Realtime
   useEffect(() => {
     if (!businessId) return
     const channel = supabase.channel('chats-realtime')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `business_id=eq.${businessId}` }, (payload) => {
         const newMsg = payload.new as Message
-        // Only add to current view if it belongs to the active conversation
         if (newMsg.conversation_id === activeConvRef.current) {
           setMessages(prev => {
             if (prev.some(m => m.id === newMsg.id)) return prev
@@ -117,7 +120,6 @@ export default function ChatsPage() {
             : [newData, ...prev]
           return updated.sort((a, b) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime())
         })
-        // Update active conv header if it's the one being viewed
         if (newData.id === activeConvRef.current) {
           setActiveConv(prev => prev ? { ...prev, ...newData } : null)
         }
@@ -126,16 +128,13 @@ export default function ChatsPage() {
     return () => { supabase.removeChannel(channel) }
   }, [businessId])
 
-  // Polling fallback — refreshes conversations every 3s and messages every 2s
-  // This guarantees live updates even if Supabase Realtime isn't enabled
+  // Polling fallback
   useEffect(() => {
     if (!businessId) return
-
     const pollConvs = setInterval(async () => {
       const { data } = await supabase.from('conversations').select('*').eq('business_id', businessId).order('last_message_at', { ascending: false }).limit(50)
       if (data) {
         setConvs(data)
-        // Update active conv if it changed
         const active = activeConvRef.current
         if (active) {
           const updated = data.find(c => c.id === active)
@@ -143,7 +142,6 @@ export default function ChatsPage() {
         }
       }
     }, 3000)
-
     const pollMsgs = setInterval(async () => {
       const convId = activeConvRef.current
       if (!convId) return
@@ -158,16 +156,15 @@ export default function ChatsPage() {
         })
       }
     }, 2000)
-
     return () => { clearInterval(pollConvs); clearInterval(pollMsgs) }
   }, [businessId])
 
   const loadConversation = async (conv: Conversation) => {
     setActiveConv(conv)
+    setMenuOpen(false)
     const { data } = await supabase.from('messages').select('*').eq('conversation_id', conv.id).order('created_at').limit(100)
     setMessages(data || [])
     setTimeout(() => messagesEndRef.current?.scrollIntoView(), 50)
-    // Mark as read
     if (conv.unread_count > 0) {
       await supabase.from('conversations').update({ unread_count: 0 }).eq('id', conv.id)
       setConvs(prev => prev.map(c => c.id === conv.id ? { ...c, unread_count: 0 } : c))
@@ -192,14 +189,15 @@ export default function ChatsPage() {
     await supabase.from('conversations').update({ status }).eq('id', activeConv.id)
     setActiveConv(prev => prev ? { ...prev, status } : null)
     setConvs(prev => prev.map(c => c.id === activeConv.id ? { ...c, status } : c))
+    setMenuOpen(false)
   }
 
   const filteredConvs = convs.filter(c => {
     const matchesFilter = filter === 'All'
+      || (filter === 'Unread' && c.unread_count > 0)
       || (filter === 'AI Active' && c.status === 'ai_active')
       || (filter === 'Manual' && c.status === 'manual')
       || (filter === 'Resolved' && c.status === 'resolved')
-      || (filter === 'Needs Human' && c.status === 'needs_human')
     const matchesSearch = !search || (c.customer_name || c.customer_phone).toLowerCase().includes(search.toLowerCase())
     return matchesFilter && matchesSearch
   })
@@ -207,52 +205,83 @@ export default function ChatsPage() {
   const messageGroups = groupMessagesByDate(messages)
 
   const displayName = (conv: Conversation) =>
-    conv.customer_name || `+${conv.customer_phone.replace(/^(\d{3})(\d{3})(\d{4,})$/, '$1 $2 $3')}`
+    conv.customer_name || `+${conv.customer_phone.replace(/^(\d{3})(\d{2,3})(\d{3})(\d{3,4})$/, '$1 $2 $3 $4')}`
 
-  const initials = (conv: Conversation) =>
-    (conv.customer_name || conv.customer_phone).charAt(0).toUpperCase()
+  const initials = (conv: Conversation) => {
+    if (conv.customer_name) {
+      const parts = conv.customer_name.trim().split(' ')
+      return parts.length > 1 ? (parts[0][0] + parts[1][0]).toUpperCase() : parts[0][0].toUpperCase()
+    }
+    return conv.customer_phone.slice(-2)
+  }
+
+  // SVG icon components
+  const SearchIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+  )
+  const MenuDotsIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+  )
+  const BackIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+  )
+  const SendIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+  )
+  const MicIcon = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 15 6.7 12H5c0 3.41 2.72 6.23 6 6.72V22h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+  )
+  const EmojiIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+  )
+  const AttachIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+  )
+  const TickIcon = () => (
+    <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><path d="M11.071.653a.457.457 0 0 0-.304-.102.493.493 0 0 0-.381.178l-6.19 7.636-2.011-2.127a.46.46 0 0 0-.36-.153.457.457 0 0 0-.34.178.46.46 0 0 0-.102.356.46.46 0 0 0 .178.305l2.4 2.4a.46.46 0 0 0 .356.102.46.46 0 0 0 .305-.178l6.508-8.051a.46.46 0 0 0 .102-.356.46.46 0 0 0-.16-.188h-.001zm3.45 0a.457.457 0 0 0-.304-.102.493.493 0 0 0-.381.178l-6.19 7.636-1.2-1.272-.463.554 1.663 1.663a.46.46 0 0 0 .356.102.46.46 0 0 0 .305-.178l6.508-8.051a.46.46 0 0 0 .102-.356.46.46 0 0 0-.16-.188h-.001z"/></svg>
+  )
 
   return (
     <div className="flex h-full" style={{ background: '#0b141a' }}>
-      {/* ── Conversation list (WhatsApp left panel) ── */}
-      <div className={`w-full md:w-[340px] flex-shrink-0 flex flex-col border-r border-[#374045] ${activeConv ? 'hidden md:flex' : 'flex'}`} style={{ background: '#111b21' }}>
+      {/* ── LEFT PANEL ── */}
+      <div className={`w-full md:w-[420px] flex-shrink-0 flex flex-col border-r border-[#2a3942] ${activeConv ? 'hidden md:flex' : 'flex'}`} style={{ background: '#111b21' }}>
+
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[#374045]">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-[#374045] flex items-center justify-center text-[#8696a0] text-xs font-bold">
-              {businessId ? 'B' : '?'}
-            </div>
-            <span className="text-[#e9edef] font-semibold text-sm">Live Chats</span>
-          </div>
-          <div className="flex gap-3 text-[#8696a0]">
-            <svg className="w-5 h-5 hover:text-white cursor-pointer transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-            <svg className="w-5 h-5 hover:text-white cursor-pointer transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
+        <div className="flex items-center justify-between px-4 h-[60px] flex-shrink-0" style={{ background: '#202c33' }}>
+          <span className="text-[#e9edef] font-bold text-lg tracking-tight">WhatsApp</span>
+          <div className="flex items-center gap-4 text-[#aebac1]">
+            <button className="hover:text-[#e9edef] transition-colors">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/></svg>
+            </button>
+            <button className="hover:text-[#e9edef] transition-colors">
+              <MenuDotsIcon />
+            </button>
           </div>
         </div>
 
-        {/* Search */}
-        <div className="px-3 py-2 border-b border-[#374045]">
-          <div className="flex items-center gap-2 bg-[#1f2c34] rounded-lg px-3 py-2">
-            <svg className="w-4 h-4 text-[#8696a0] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        {/* Search bar */}
+        <div className="px-2.5 py-1.5" style={{ background: '#111b21' }}>
+          <div className="flex items-center bg-[#202c33] rounded-lg px-3 h-[35px]">
+            <span className="text-[#8696a0] mr-6"><SearchIcon /></span>
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search or start new chat"
+              placeholder="Search or start a new chat"
               className="bg-transparent text-[#e9edef] placeholder-[#8696a0] text-sm outline-none flex-1"
             />
           </div>
         </div>
 
         {/* Filter tabs */}
-        <div className="flex gap-1 px-3 py-2 border-b border-[#374045] overflow-x-auto scrollbar-none">
+        <div className="flex gap-2 px-3 py-2 overflow-x-auto scrollbar-none">
           {filters.map(f => (
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1 rounded-full text-xs whitespace-nowrap transition-all font-medium ${
+              className={`px-3 py-1.5 rounded-full text-[13px] whitespace-nowrap transition-all ${
                 filter === f
-                  ? 'bg-[#00a884]/20 text-[#00a884] border border-[#00a884]/30'
-                  : 'text-[#8696a0] hover:text-[#e9edef] border border-transparent'
+                  ? 'bg-[#00a884] text-[#111b21] font-medium'
+                  : 'bg-[#202c33] text-[#e9edef] hover:bg-[#2a3942]'
               }`}
             >
               {f}
@@ -260,35 +289,42 @@ export default function ChatsPage() {
           ))}
         </div>
 
-        {/* Conversation items */}
+        {/* Conversation list */}
         <div className="flex-1 overflow-y-auto">
           {filteredConvs.map(conv => {
-            const cfg = statusConfig[conv.status] || statusConfig.ai_active
             const isActive = activeConv?.id === conv.id
+            const color = getAvatarColor(conv.customer_name || conv.customer_phone)
             return (
               <button
                 key={conv.id}
                 onClick={() => loadConversation(conv)}
-                className={`w-full flex items-center gap-3 px-4 py-3 border-b border-[#374045]/40 text-left transition-colors ${isActive ? 'bg-[#2a3942]' : 'hover:bg-[#1f2c34]'}`}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${isActive ? 'bg-[#2a3942]' : 'hover:bg-[#202c33]'}`}
               >
                 {/* Avatar */}
-                <div className="relative flex-shrink-0">
-                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-[#374045] to-[#2a3942] flex items-center justify-center text-base font-semibold text-[#e9edef]">
-                    {initials(conv)}
-                  </div>
-                  <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#111b21] ${cfg.dot}`} />
+                <div
+                  className="w-[49px] h-[49px] rounded-full flex items-center justify-center text-white text-base font-medium flex-shrink-0"
+                  style={{ backgroundColor: color }}
+                >
+                  {initials(conv)}
                 </div>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline justify-between gap-1">
-                    <span className="text-[#e9edef] text-sm font-medium truncate">{displayName(conv)}</span>
-                    <span className="text-[#8696a0] text-[10px] flex-shrink-0">{conv.last_message_at ? formatListTime(conv.last_message_at) : ''}</span>
+                <div className="flex-1 min-w-0 border-b border-[#222d34] pb-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[#e9edef] text-[16px] truncate">{displayName(conv)}</span>
+                    <span className={`text-[12px] flex-shrink-0 ${conv.unread_count > 0 ? 'text-[#00a884]' : 'text-[#8696a0]'}`}>
+                      {conv.last_message_at ? formatListTime(conv.last_message_at) : ''}
+                    </span>
                   </div>
-                  <div className="flex items-center justify-between gap-1 mt-0.5">
-                    <span className="text-[#8696a0] text-xs truncate">{conv.last_message || 'No messages yet'}</span>
+                  <div className="flex items-center justify-between gap-2 mt-0.5">
+                    <span className="text-[#8696a0] text-[13.5px] truncate flex items-center gap-1">
+                      {conv.status === 'ai_active' && (
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#00a884] flex-shrink-0" />
+                      )}
+                      {conv.last_message || 'No messages yet'}
+                    </span>
                     {conv.unread_count > 0 && (
-                      <span className="w-5 h-5 bg-[#00a884] text-white text-[10px] rounded-full flex items-center justify-center flex-shrink-0 font-medium">
-                        {conv.unread_count > 9 ? '9+' : conv.unread_count}
+                      <span className="min-w-[20px] h-[20px] bg-[#00a884] text-[#111b21] text-[11px] rounded-full flex items-center justify-center flex-shrink-0 font-bold px-1">
+                        {conv.unread_count > 99 ? '99+' : conv.unread_count}
                       </span>
                     )}
                   </div>
@@ -297,114 +333,99 @@ export default function ChatsPage() {
             )
           })}
           {filteredConvs.length === 0 && (
-            <div className="py-16 text-center">
-              <div className="w-12 h-12 bg-[#1f2c34] rounded-full flex items-center justify-center mx-auto mb-3">
-                <svg className="w-6 h-6 text-[#374045]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" /></svg>
-              </div>
+            <div className="py-20 text-center">
               <p className="text-[#8696a0] text-sm">No conversations found</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Active conversation (WhatsApp right panel) ── */}
+      {/* ── RIGHT PANEL — CHAT ── */}
       {activeConv ? (
         <div className="flex-1 flex flex-col min-w-0">
           {/* Chat header */}
-          <div className="flex items-center gap-3 px-4 py-2.5 bg-[#1f2c34] border-b border-[#374045] flex-shrink-0">
+          <div className="flex items-center gap-3 px-4 h-[60px] flex-shrink-0" style={{ background: '#202c33' }}>
             <button
               onClick={() => setActiveConv(null)}
-              className="md:hidden text-[#8696a0] hover:text-white mr-1 transition-colors"
+              className="md:hidden text-[#aebac1] hover:text-[#e9edef] mr-1 transition-colors"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              <BackIcon />
             </button>
 
-            <div className="relative flex-shrink-0">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#374045] to-[#2a3942] flex items-center justify-center text-sm font-semibold text-[#e9edef]">
-                {initials(activeConv)}
-              </div>
-              <div className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#1f2c34] ${statusConfig[activeConv.status]?.dot}`} />
+            <div
+              className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-medium flex-shrink-0"
+              style={{ backgroundColor: getAvatarColor(activeConv.customer_name || activeConv.customer_phone) }}
+            >
+              {initials(activeConv)}
             </div>
 
             <div className="flex-1 min-w-0">
-              <div className="text-[#e9edef] font-semibold text-sm leading-none">
-                {displayName(activeConv)}
-              </div>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${statusConfig[activeConv.status]?.badge}`}>
-                  {statusConfig[activeConv.status]?.label}
-                </span>
-                <span className="text-[#8696a0] text-[10px]">+{activeConv.customer_phone}</span>
+              <div className="text-[#e9edef] text-[16px] leading-tight truncate">{displayName(activeConv)}</div>
+              <div className="text-[#8696a0] text-[13px] leading-tight">
+                {activeConv.status === 'ai_active' ? 'AI handling' : activeConv.status === 'manual' ? 'Manual mode' : activeConv.status === 'resolved' ? 'Resolved' : 'Active'}
               </div>
             </div>
 
-            {/* Action buttons */}
-            <div className="flex items-center gap-2">
-              {activeConv.status !== 'manual' ? (
-                <button
-                  onClick={() => updateStatus('manual')}
-                  className="text-xs px-3 py-1.5 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded-full hover:bg-blue-500/25 transition-colors"
-                >
-                  Take over
-                </button>
-              ) : (
-                <button
-                  onClick={() => updateStatus('ai_active')}
-                  className="text-xs px-3 py-1.5 bg-[#00a884]/15 text-[#00a884] border border-[#00a884]/20 rounded-full hover:bg-[#00a884]/25 transition-colors"
-                >
-                  Hand to AI
-                </button>
-              )}
+            {/* Header icons */}
+            <div className="flex items-center gap-5 text-[#aebac1] relative">
+              <button className="hover:text-[#e9edef] transition-colors"><SearchIcon /></button>
               <button
-                onClick={() => updateStatus('resolved')}
-                className="text-xs px-3 py-1.5 bg-[#1f2c34] text-[#8696a0] border border-[#374045] rounded-full hover:bg-[#2a3942] transition-colors"
+                onClick={() => setMenuOpen(!menuOpen)}
+                className="hover:text-[#e9edef] transition-colors"
               >
-                Resolve
+                <MenuDotsIcon />
               </button>
-              <button className="text-[#8696a0] hover:text-white transition-colors p-1">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-              </button>
-              <button className="text-[#8696a0] hover:text-white transition-colors p-1">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
-              </button>
+
+              {/* Dropdown menu */}
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                  <div className="absolute right-0 top-10 z-20 py-2 rounded-md shadow-xl min-w-[200px]" style={{ background: '#233138' }}>
+                    {activeConv.status !== 'manual' ? (
+                      <button onClick={() => updateStatus('manual')} className="w-full text-left px-6 py-2.5 text-[#e9edef] text-sm hover:bg-[#182229] transition-colors">
+                        Take over chat
+                      </button>
+                    ) : (
+                      <button onClick={() => updateStatus('ai_active')} className="w-full text-left px-6 py-2.5 text-[#e9edef] text-sm hover:bg-[#182229] transition-colors">
+                        Hand back to AI
+                      </button>
+                    )}
+                    {activeConv.status !== 'resolved' && (
+                      <button onClick={() => updateStatus('resolved')} className="w-full text-left px-6 py-2.5 text-[#e9edef] text-sm hover:bg-[#182229] transition-colors">
+                        Resolve conversation
+                      </button>
+                    )}
+                    {activeConv.status === 'resolved' && (
+                      <button onClick={() => updateStatus('ai_active')} className="w-full text-left px-6 py-2.5 text-[#e9edef] text-sm hover:bg-[#182229] transition-colors">
+                        Reopen conversation
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
-          {/* AI status banner */}
-          {activeConv.status === 'ai_active' && (
-            <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-[#00a884]/8 border-b border-[#00a884]/15 flex-shrink-0">
-              <div className="w-1.5 h-1.5 rounded-full bg-[#00a884] animate-pulse" />
-              <span className="text-[#00a884] text-xs">AI agent is handling this conversation</span>
-            </div>
-          )}
-          {activeConv.status === 'manual' && (
-            <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-blue-500/8 border-b border-blue-500/15 flex-shrink-0">
-              <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-              <span className="text-blue-400 text-xs">You are managing this conversation manually</span>
-            </div>
-          )}
-
-          {/* Messages — WA wallpaper background */}
+          {/* Messages area */}
           <div
-            className="flex-1 overflow-y-auto p-4 space-y-1"
+            className="flex-1 overflow-y-auto px-[6%] py-3"
             style={{
-              backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.018'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+              backgroundImage: `url("data:image/svg+xml,%3Csvg width='412' height='412' viewBox='0 0 412 412' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.015'%3E%3Crect x='30' y='30' width='4' height='4' rx='1'/%3E%3Crect x='100' y='60' width='4' height='4' rx='1'/%3E%3Crect x='200' y='20' width='4' height='4' rx='1'/%3E%3Crect x='300' y='80' width='4' height='4' rx='1'/%3E%3Crect x='50' y='150' width='4' height='4' rx='1'/%3E%3Crect x='150' y='130' width='4' height='4' rx='1'/%3E%3Crect x='250' y='170' width='4' height='4' rx='1'/%3E%3Crect x='350' y='140' width='4' height='4' rx='1'/%3E%3Crect x='80' y='250' width='4' height='4' rx='1'/%3E%3Crect x='180' y='230' width='4' height='4' rx='1'/%3E%3Crect x='280' y='270' width='4' height='4' rx='1'/%3E%3Crect x='380' y='240' width='4' height='4' rx='1'/%3E%3Crect x='40' y='350' width='4' height='4' rx='1'/%3E%3Crect x='140' y='330' width='4' height='4' rx='1'/%3E%3Crect x='240' y='370' width='4' height='4' rx='1'/%3E%3Crect x='340' y='340' width='4' height='4' rx='1'/%3E%3C/g%3E%3C/svg%3E")`,
               backgroundColor: '#0b141a',
             }}
           >
             {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-                <div className="bg-[#182229] text-[#8696a0] text-xs px-4 py-2 rounded-full">
-                  No messages yet — waiting for customer to write
-                </div>
+              <div className="flex items-center justify-center h-full">
+                <span className="bg-[#182229] text-[#8696a0] text-[12.5px] px-3 py-1.5 rounded-lg shadow-sm">
+                  Messages are end-to-end encrypted. No one outside of this chat can read them.
+                </span>
               </div>
             )}
 
             {messageGroups.map(group => (
               <div key={group.label}>
-                {/* Date separator */}
                 <div className="flex justify-center my-3">
-                  <span className="bg-[#182229] text-[#8696a0] text-[11px] px-3 py-1 rounded-full shadow-sm">
+                  <span className="bg-[#182229] text-[#8696a0] text-[12.5px] px-3 py-1 rounded-lg shadow-sm uppercase tracking-wide" style={{ fontSize: '12px' }}>
                     {group.label}
                   </span>
                 </div>
@@ -412,44 +433,42 @@ export default function ChatsPage() {
                 {group.messages.map(msg => {
                   const isOut = msg.from_role === 'ai' || msg.from_role === 'staff'
                   return (
-                    <div key={msg.id} className={`flex mb-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
+                    <div key={msg.id} className={`flex mb-[2px] ${isOut ? 'justify-end' : 'justify-start'}`}>
                       <div
-                        className={`relative max-w-[72%] md:max-w-sm lg:max-w-md px-3 py-2 text-sm leading-relaxed shadow-md ${
+                        className={`relative max-w-[65%] px-2.5 py-1.5 text-[14.2px] leading-[19px] shadow-sm ${
                           isOut
-                            ? 'bg-[#005c4b] text-[#e9edef] rounded-[10px_2px_10px_10px]'
-                            : 'bg-[#1f2c34] text-[#e9edef] rounded-[2px_10px_10px_10px]'
+                            ? 'bg-[#005c4b] text-[#e9edef] rounded-[7.5px] rounded-tr-none'
+                            : 'bg-[#202c33] text-[#e9edef] rounded-[7.5px] rounded-tl-none'
                         }`}
-                        style={{ animation: 'waMsg 0.15s ease-out both' }}
                       >
-                        {/* Sender label for AI/Staff */}
-                        {isOut && (
-                          <div className="text-[10px] text-[#00a884] mb-0.5 font-medium">
-                            {msg.from_role === 'ai' ? '🤖 AI Agent' : '👤 Staff'}
-                          </div>
+                        {/* Sender label */}
+                        {isOut && msg.from_role === 'staff' && (
+                          <div className="text-[12px] text-[#53bdeb] font-medium mb-0.5">You</div>
+                        )}
+                        {isOut && msg.from_role === 'ai' && (
+                          <div className="text-[12px] text-[#00a884] font-medium mb-0.5">AI Agent</div>
                         )}
 
                         {msg.message_type === 'audio' ? (
-                          <div className="min-w-[220px]">
+                          <div className="min-w-[240px]">
                             {msg.audio_url && (
-                              <audio src={msg.audio_url} controls className="w-full h-8 rounded-lg" style={{ filter: 'invert(1) hue-rotate(180deg) brightness(0.8)' }} />
+                              <audio src={msg.audio_url} controls className="w-full h-[32px]" style={{ filter: 'invert(1) hue-rotate(180deg) brightness(0.85)' }} />
                             )}
                             {msg.content && msg.content !== '[Voice message received]' && (
-                              <p className="text-xs text-[#8696a0] mt-1.5 italic">"{msg.content}"</p>
+                              <p className="text-[12px] text-[#8696a0] mt-1 italic leading-tight">&quot;{msg.content}&quot;</p>
                             )}
                           </div>
                         ) : (
-                          <span>{msg.content}</span>
+                          <span className="whitespace-pre-wrap">{msg.content}</span>
                         )}
 
-                        {/* Timestamp + tick */}
-                        <div className={`flex items-center gap-1 mt-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
-                          <span className="text-[10px] text-[#8696a0]">{formatTime(msg.created_at)}</span>
+                        {/* Time + ticks inline */}
+                        <span className="float-right ml-2 mt-1 flex items-center gap-0.5">
+                          <span className="text-[11px] text-[#ffffff99] leading-none">{formatTime(msg.created_at)}</span>
                           {isOut && (
-                            <svg className="w-3.5 h-3.5 text-[#53bdeb]" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z" />
-                            </svg>
+                            <span className="text-[#53bdeb] ml-0.5"><TickIcon /></span>
                           )}
-                        </div>
+                        </span>
                       </div>
                     </div>
                   )
@@ -459,47 +478,42 @@ export default function ChatsPage() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Reply input — WA style, only in manual mode */}
-          <div className="flex-shrink-0 border-t border-[#374045] bg-[#1f2c34]">
+          {/* Bottom bar */}
+          <div className="flex-shrink-0 h-[62px] flex items-center gap-2 px-4" style={{ background: '#202c33' }}>
             {activeConv.status === 'manual' ? (
-              <form onSubmit={sendReply} className="flex items-center gap-2 px-3 py-2">
-                {/* Emoji */}
-                <button type="button" className="text-[#8696a0] hover:text-white transition-colors flex-shrink-0">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+              <>
+                <button type="button" className="text-[#8696a0] hover:text-[#e9edef] transition-colors flex-shrink-0">
+                  <EmojiIcon />
                 </button>
-                {/* Attach */}
-                <button type="button" className="text-[#8696a0] hover:text-white transition-colors flex-shrink-0">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+                <button type="button" className="text-[#8696a0] hover:text-[#e9edef] transition-colors flex-shrink-0">
+                  <AttachIcon />
                 </button>
-
-                <input
-                  value={reply}
-                  onChange={e => setReply(e.target.value)}
-                  placeholder="Type a message"
-                  className="flex-1 bg-[#2a3942] text-[#e9edef] placeholder-[#8696a0] rounded-full px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-[#00a884]/30"
-                />
-
-                {reply.trim() ? (
+                <form onSubmit={sendReply} className="flex-1 flex items-center gap-2">
+                  <input
+                    value={reply}
+                    onChange={e => setReply(e.target.value)}
+                    placeholder="Type a message"
+                    className="flex-1 bg-[#2a3942] text-[#e9edef] placeholder-[#8696a0] rounded-lg px-3 py-2.5 text-[15px] outline-none"
+                  />
                   <button
-                    type="submit"
+                    type={reply.trim() ? 'submit' : 'button'}
                     disabled={sending}
-                    className="w-11 h-11 bg-[#00a884] hover:bg-[#00c49a] disabled:opacity-50 rounded-full flex items-center justify-center transition-all flex-shrink-0 hover:shadow-[0_0_16px_rgba(0,168,132,0.4)]"
+                    className="text-[#8696a0] hover:text-[#e9edef] transition-colors flex-shrink-0 disabled:opacity-50"
                   >
-                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>
+                    {reply.trim() ? <SendIcon /> : <MicIcon />}
                   </button>
-                ) : (
-                  <button type="button" className="w-11 h-11 bg-[#00a884] rounded-full flex items-center justify-center flex-shrink-0">
-                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 15c1.66 0 2.99-1.34 2.99-3L15 6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 15 6.7 12H5c0 3.41 2.72 6.23 6 6.72V22h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
-                  </button>
-                )}
-              </form>
+                </form>
+              </>
             ) : (
-              <div className="flex items-center justify-center gap-3 px-4 py-3">
-                <div className="w-2 h-2 rounded-full bg-[#00a884] animate-pulse" />
+              <div className="flex-1 flex items-center justify-center gap-2">
+                {activeConv.status === 'ai_active' && (
+                  <span className="inline-block w-2 h-2 rounded-full bg-[#00a884] animate-pulse" />
+                )}
                 <span className="text-[#8696a0] text-sm">
                   {activeConv.status === 'resolved'
-                    ? 'Conversation resolved — '
-                    : 'AI is handling replies — '}
+                    ? 'Conversation resolved'
+                    : 'AI is handling replies'}
+                  {' \u2014 '}
                   <button onClick={() => updateStatus('manual')} className="text-[#00a884] hover:underline">
                     {activeConv.status === 'resolved' ? 'reopen' : 'take over'}
                   </button>
@@ -510,23 +524,21 @@ export default function ChatsPage() {
         </div>
       ) : (
         /* Empty state */
-        <div className="hidden md:flex flex-1 items-center justify-center" style={{ background: '#0b141a' }}>
-          <div className="text-center">
-            <div className="w-20 h-20 bg-[#1f2c34] rounded-full flex items-center justify-center mx-auto mb-4 border border-[#374045]">
-              <svg className="w-10 h-10 text-[#374045]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" /></svg>
+        <div className="hidden md:flex flex-1 items-center justify-center flex-col gap-6" style={{ background: '#222e35' }}>
+          <div className="w-[320px] text-center">
+            <div className="w-[250px] h-[250px] mx-auto mb-6 rounded-full flex items-center justify-center" style={{ background: '#364147' }}>
+              <svg width="110" height="110" viewBox="0 0 24 24" fill="none" stroke="#8696a0" strokeWidth="0.8"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
             </div>
-            <p className="text-[#e9edef] font-medium text-base mb-1">WAgenT Live Chats</p>
-            <p className="text-[#8696a0] text-sm">Select a conversation to view messages</p>
+            <h2 className="text-[#e9edef] text-[28px] font-light mb-3">WAgenT for Business</h2>
+            <p className="text-[#8696a0] text-sm leading-5">
+              Send and receive messages from your customers. AI handles replies automatically, or take over any conversation manually.
+            </p>
+          </div>
+          <div className="w-[320px] border-t border-[#374045] pt-4 text-center">
+            <p className="text-[#8696a0] text-[13px]">Your personal messages are end-to-end encrypted</p>
           </div>
         </div>
       )}
-
-      <style jsx>{`
-        @keyframes waMsg {
-          from { opacity: 0; transform: translateY(4px) scale(0.98); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-      `}</style>
     </div>
   )
 }
