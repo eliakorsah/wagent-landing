@@ -38,6 +38,8 @@ export async function POST(request: NextRequest) {
 
     const resend = new Resend(resendKey)
 
+    console.log('[waitlist] Sending emails:', { FROM_EMAIL, WAITLIST_NOTIFY_EMAIL, cleanEmail })
+
     const internalHtml = `
       <div style="font-family: -apple-system, sans-serif; padding: 24px; max-width: 600px;">
         <h2 style="color:#D4AF37; margin:0 0 16px;">New Wagent Africa waitlist signup</h2>
@@ -72,7 +74,7 @@ export async function POST(request: NextRequest) {
       </div>
     `
 
-    await Promise.all([
+    const [internalResult, customerResult] = await Promise.all([
       resend.emails.send({
         from: FROM_EMAIL,
         to: WAITLIST_NOTIFY_EMAIL,
@@ -86,6 +88,8 @@ export async function POST(request: NextRequest) {
         html: customerHtml,
       }),
     ])
+
+    console.log('[waitlist] Email results:', { internalResult, customerResult })
 
     return NextResponse.json({ success: true })
   } catch (e: any) {
